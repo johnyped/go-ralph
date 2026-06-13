@@ -1,8 +1,19 @@
 # go-ralph
 
-Loop agent orchestrator — runs `pi` coding sessions sequentially via `herdr`.
+Autonomous development workflow orchestrator — runs `pi` coding sessions sequentially via `herdr`.
 
-Ralph reads issues from `issues/*.md`, assembles a prompt per issue (context files + skills + issue content + instruction), spawns a `pi --mode json` session in a dedicated `herdr` workspace pane, waits for it to finish, and records the result.
+Ralph automates the final stage of autonomous software delivery: it reads issues from `issues/*.md`, assembles a prompt per issue (context files + skills + issue content + instruction), spawns a `pi --mode json` session in a dedicated `herdr` workspace pane, waits for it to finish, and records the result. By chaining sequential AI agents through design refinement, PRD generation, issue breakdown, and implementation, go-ralph enables a complete autonomous development workflow from concept to shipped code.
+
+## Inspiration: The RALP Loop
+
+go-ralph is inspired by the **RALP loop** technique from [Matt Pocock's skills](https://github.com/mattpocock/skills), which combines sequential AI-powered workflows to implement software features end-to-end:
+
+1. **`/grill-me`** — Stress-test a plan or design through relentless questioning until reaching shared understanding
+2. **`/to-prd`** — Convert the refined plan into a formal PRD (Product Requirements Document)
+3. **`/to-issue`** — Break the PRD into independently-grabbable implementation issues
+4. **`go-ralph run`** — Execute all issues sequentially, with each issue assigned to a dedicated `pi` coding session
+
+This workflow bridges the gap between high-level design and hands-on implementation, ensuring clarity at each stage before handing off to the next. go-ralph automates the final orchestration step, running each issue through a full TDD (red-green-refactor) cycle with resumability and crash recovery.
 
 ## Requirements
 
@@ -198,13 +209,3 @@ The pi session ID sidecar follows the same naming: `<slug>.jsonl.session-id`, `<
 
 Use `go-ralph logs <project> <issue-id>` to get the session ID and `pi --session <id>` resume command.
 
-## Inspiration: The RALP Loop
-
-go-ralph is inspired by the **RALP loop** technique from [Matt Pocock's skills](https://github.com/mattpocock/skills), which combines sequential AI-powered workflows to implement software features end-to-end:
-
-1. **`/grill-me`** — Stress-test a plan or design through relentless questioning until reaching shared understanding
-2. **`/to-prd`** — Convert the refined plan into a formal PRD (Product Requirements Document)
-3. **`/to-issue`** — Break the PRD into independently-grabbable implementation issues
-4. **`go-ralph run`** — Execute all issues sequentially, with each issue assigned to a dedicated `pi` coding session
-
-This workflow bridges the gap between high-level design and hands-on implementation, ensuring clarity at each stage before handing off to the next. go-ralph automates the final orchestration step, running each issue through a full TDD (red-green-refactor) cycle with resumability and crash recovery.
