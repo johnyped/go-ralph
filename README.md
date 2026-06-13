@@ -197,3 +197,14 @@ Raw `pi --mode json` output is tee'd to `.ralph/logs/<slug>.jsonl`. On retries, 
 The pi session ID sidecar follows the same naming: `<slug>.jsonl.session-id`, `<slug>-attempt-2.jsonl.session-id`, etc.
 
 Use `go-ralph logs <project> <issue-id>` to get the session ID and `pi --session <id>` resume command.
+
+## Inspiration: The RALP Loop
+
+go-ralph is inspired by the **RALP loop** technique from [Matt Pocock's skills](https://github.com/mattpocock/skills), which combines sequential AI-powered workflows to implement software features end-to-end:
+
+1. **`/grill-me`** — Stress-test a plan or design through relentless questioning until reaching shared understanding
+2. **`/to-prd`** — Convert the refined plan into a formal PRD (Product Requirements Document)
+3. **`/to-issue`** — Break the PRD into independently-grabbable implementation issues
+4. **`go-ralph run`** — Execute all issues sequentially, with each issue assigned to a dedicated `pi` coding session
+
+This workflow bridges the gap between high-level design and hands-on implementation, ensuring clarity at each stage before handing off to the next. go-ralph automates the final orchestration step, running each issue through a full TDD (red-green-refactor) cycle with resumability and crash recovery.
