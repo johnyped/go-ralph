@@ -357,7 +357,6 @@ func runPipelineParallel(dir, project string, cfg *config.Config, s *state.State
 				defer wg.Done()
 				defer func() { <-sem }()
 
-				fmt.Printf("\n[%s] %s\n", iss.ID, iss.Slug)
 				succeeded, lastErr := runIssueRetry(dir, project, cfg, s, iss, workspaceID, &mu)
 				results <- issueResult{id: iss.ID, success: succeeded, err: lastErr}
 			}(issue)
@@ -399,10 +398,12 @@ func runIssueRetry(dir, project string, cfg *config.Config, s *state.State, issu
 		maxRetries = 1
 	}
 
+	fmt.Printf("\n[%s] %s\n", issue.ID, issue.Slug)
+
 	var lastErr error
 	for attempt := 1; attempt <= maxRetries; attempt++ {
 		if attempt > 1 {
-			fmt.Printf("  retry %d/%d...\n", attempt, maxRetries)
+			fmt.Printf("[%s] retry %d/%d...\n", issue.ID, attempt, maxRetries)
 		}
 
 		promptFile, err := prompt.Assemble(dir, cfg, toIssue(issue))
@@ -436,8 +437,8 @@ func runIssueRetry(dir, project string, cfg *config.Config, s *state.State, issu
 		if mu != nil {
 			mu.Unlock()
 		}
-		fmt.Printf("  pane %s (%s)\n", agentName, paneID)
-		fmt.Printf("  waiting (timeout %dm)...\n", cfg.TimeoutMinutes)
+		fmt.Printf("[%s] pane %s (%s)\n", issue.ID, agentName, paneID)
+		fmt.Printf("[%s] waiting (timeout %dm)...\n", issue.ID, cfg.TimeoutMinutes)
 
 		matched, waitErr := herdr.WaitOutput(paneID, "RALPH_DONE:", timeout)
 
@@ -459,12 +460,12 @@ func runIssueRetry(dir, project string, cfg *config.Config, s *state.State, issu
 
 		if waitErr != nil {
 			lastErr = fmt.Errorf("timeout: %w", waitErr)
-			fmt.Fprintf(os.Stderr, "  [%s] attempt %d timeout\n", issue.ID, attempt)
+			fmt.Fprintf(os.Stderr, "[%s] attempt %d timeout\n", issue.ID, attempt)
 			continue
 		}
 		if matched != "RALPH_DONE:0" {
 			lastErr = fmt.Errorf("exit: %s", matched)
-			fmt.Fprintf(os.Stderr, "  [%s] attempt %d failed (%s)\n", issue.ID, attempt, matched)
+			fmt.Fprintf(os.Stderr, "[%s] attempt %d failed (%s)\n", issue.ID, attempt, matched)
 			continue
 		}
 
