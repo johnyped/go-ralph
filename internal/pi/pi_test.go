@@ -11,7 +11,7 @@ import (
 
 func TestPaneArgv_Shape(t *testing.T) {
 	cfg := &config.Config{PiPath: "pi", PiSessionPrefix: "ralph", Skills: nil}
-	argv := PaneArgv("/proj", cfg, "001-scaffold", "/proj/.ralph/prompts/001-scaffold.md", "/proj/.ralph/logs/001-scaffold.jsonl")
+	argv := PaneArgv("/proj", cfg, "001-scaffold", "/proj/.ralph/prompts/001-scaffold.md", "/proj/.ralph/logs/001-scaffold.jsonl", "")
 	if len(argv) != 3 || argv[0] != "bash" || argv[1] != "-c" {
 		t.Fatalf("expected [bash -c <cmd>], got %v", argv)
 	}
@@ -32,7 +32,7 @@ func TestPaneArgv_Shape(t *testing.T) {
 
 func TestPaneArgv_JsonMode(t *testing.T) {
 	cfg := &config.Config{PiPath: "pi", PiSessionPrefix: "ralph", Skills: nil}
-	argv := PaneArgv("/proj", cfg, "001-scaffold", "/proj/.ralph/prompts/001-scaffold.md", "/proj/.ralph/logs/001-scaffold.jsonl")
+	argv := PaneArgv("/proj", cfg, "001-scaffold", "/proj/.ralph/prompts/001-scaffold.md", "/proj/.ralph/logs/001-scaffold.jsonl", "")
 	cmd := argv[2]
 	if !strings.Contains(cmd, "--mode json") {
 		t.Errorf("cmd missing --mode json: %s", cmd)
@@ -42,7 +42,7 @@ func TestPaneArgv_JsonMode(t *testing.T) {
 func TestPaneArgv_SessionSidecar(t *testing.T) {
 	cfg := &config.Config{PiPath: "pi", PiSessionPrefix: "ralph", Skills: nil}
 	logFile := "/proj/.ralph/logs/001-scaffold.jsonl"
-	argv := PaneArgv("/proj", cfg, "001-scaffold", "/proj/.ralph/prompts/001-scaffold.md", logFile)
+	argv := PaneArgv("/proj", cfg, "001-scaffold", "/proj/.ralph/prompts/001-scaffold.md", logFile, "")
 	cmd := argv[2]
 	sidecar := SessionIDPath(logFile)
 	if !strings.Contains(cmd, filepath.Base(sidecar)) {
@@ -57,7 +57,7 @@ func TestPaneArgv_SkillsResolved(t *testing.T) {
 		PiSessionPrefix: "ralph",
 		Skills:          []string{"/abs/tdd", ".kiro/skills/herdr"},
 	}
-	argv := PaneArgv("/myproj", cfg, "001", "/myproj/.ralph/prompts/001.md", "/myproj/.ralph/logs/001.jsonl")
+	argv := PaneArgv("/myproj", cfg, "001", "/myproj/.ralph/prompts/001.md", "/myproj/.ralph/logs/001.jsonl", "")
 	cmd := argv[2]
 	// --skill flags must NOT appear in the pane command
 	if strings.Contains(cmd, "--skill") {
@@ -67,7 +67,7 @@ func TestPaneArgv_SkillsResolved(t *testing.T) {
 
 func TestBuildArgs_JsonMode(t *testing.T) {
 	cfg := &config.Config{PiPath: "pi", PiSessionPrefix: "ralph"}
-	args := buildArgs("", cfg, "001-scaffold")
+	args := buildArgs("", cfg, "001-scaffold", "")
 	joined := strings.Join(args, " ")
 	if !strings.Contains(joined, "--mode json") {
 		t.Errorf("args missing --mode json: %v", args)
@@ -76,7 +76,7 @@ func TestBuildArgs_JsonMode(t *testing.T) {
 
 func TestBuildArgs_Name(t *testing.T) {
 	cfg := &config.Config{PiPath: "pi", PiSessionPrefix: "ralph"}
-	args := buildArgs("", cfg, "001-scaffold")
+	args := buildArgs("", cfg, "001-scaffold", "")
 	joined := strings.Join(args, " ")
 	if !strings.Contains(joined, "--name") || !strings.Contains(joined, "ralph: 001-scaffold") {
 		t.Errorf("args missing --name: %v", args)
@@ -85,7 +85,7 @@ func TestBuildArgs_Name(t *testing.T) {
 
 func TestBuildArgs_NoSkillFlags(t *testing.T) {
 	cfg := &config.Config{PiPath: "pi", PiSessionPrefix: "ralph", Skills: []string{"/abs/tdd"}}
-	args := buildArgs("", cfg, "001")
+	args := buildArgs("", cfg, "001", "")
 	for _, a := range args {
 		if a == "--skill" {
 			t.Errorf("buildArgs must not emit --skill flags: %v", args)
@@ -120,7 +120,7 @@ func TestLogFileAttempt(t *testing.T) {
 
 func TestPaneArgv_NoRPCMode(t *testing.T) {
 	cfg := &config.Config{PiPath: "pi", PiSessionPrefix: "ralph", Skills: nil}
-	argv := PaneArgv("/proj", cfg, "001", "/proj/.ralph/prompts/001.md", "/proj/.ralph/logs/001.jsonl")
+	argv := PaneArgv("/proj", cfg, "001", "/proj/.ralph/prompts/001.md", "/proj/.ralph/logs/001.jsonl", "")
 	cmd := argv[2]
 	if strings.Contains(cmd, "--mode rpc") {
 		t.Errorf("cmd must not contain --mode rpc: %s", cmd)
@@ -130,7 +130,7 @@ func TestPaneArgv_NoRPCMode(t *testing.T) {
 func TestPaneArgv_PromptFileReferenced(t *testing.T) {
 	cfg := &config.Config{PiPath: "pi", PiSessionPrefix: "ralph", Skills: nil}
 	promptFile := "/proj/.ralph/prompts/001-scaffold.md"
-	argv := PaneArgv("/proj", cfg, "001-scaffold", promptFile, "/proj/.ralph/logs/001.jsonl")
+	argv := PaneArgv("/proj", cfg, "001-scaffold", promptFile, "/proj/.ralph/logs/001.jsonl", "")
 	cmd := argv[2]
 	if !strings.Contains(cmd, "001-scaffold.md") {
 		t.Errorf("cmd missing prompt file reference: %s", cmd)
@@ -144,7 +144,7 @@ func TestPythonRendererWritesSidecar(t *testing.T) {
 	sidecar := SessionIDPath(logFile)
 
 	cfg := &config.Config{PiPath: "pi", PiSessionPrefix: "ralph", Skills: nil}
-	argv := PaneArgv(dir, cfg, "001", filepath.Join(dir, "001.md"), logFile)
+	argv := PaneArgv(dir, cfg, "001", filepath.Join(dir, "001.md"), logFile, "")
 	cmd := argv[2]
 
 	// sidecar path must appear in the shell command so python3 can write to it

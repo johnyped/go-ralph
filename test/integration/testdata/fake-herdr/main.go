@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 )
 
@@ -24,6 +25,15 @@ func main() {
 			fmt.Println(`{"result":{"agents":[]}}`)
 			return
 		case "start":
+			if logDir := os.Getenv("FAKE_HERDR_LOG_DIR"); logDir != "" {
+				if len(os.Args) > 3 {
+					f, _ := os.OpenFile(filepath.Join(logDir, "agents.txt"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+					if f != nil {
+						fmt.Fprintln(f, os.Args[3])
+						f.Close()
+					}
+				}
+			}
 			fmt.Println(`{"result":{"agent":{"pane_id":"t1-2"}}}`)
 			return
 		}

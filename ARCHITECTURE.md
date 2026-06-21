@@ -2,20 +2,22 @@
 
 ## Overview
 
-Ralph is a sequential loop agent orchestrator. It reads issues from a project, assembles a prompt per issue, spawns a `pi` coding agent session inside a `herdr` pane, waits for completion, and records the result.
+Ralph is an agent orchestrator. It reads issues from a project, assembles a prompt per issue, spawns a `pi` coding agent session inside a `herdr` pane, waits for completion, and records the result. Execution can be sequential or parallel, controlled by `pipeline.yaml` and `max_parallel`.
 
 ## CLI Workflow
 
 ```
-go-ralph init <project>
+go-ralph init <project> [--parallel N]
     │
     ├── scan issues/*.md  (filename order, NNN- prefix)
     ├── check: pi on PATH
     ├── check: herdr on PATH
     ├── check: herdr-pi integration (warning only)
     ├── check: context_files exist
-    ├── write .ralph/config.yaml  (if not exists)
-    └── write .ralph/<project>.json  (all issues → pending)
+    ├── prompt for sequential/parallel if --parallel not given
+    ├── write .ralph/config.yaml  (always overwrite; sets max_parallel, default_model)
+    ├── write .ralph/pipeline.yaml  (path assignments; round-robin if parallel)
+    └── write .ralph/<project>.json  (all issues → pending, model seeded from default_model)
 
 go-ralph run <project>
     │
@@ -29,27 +31,31 @@ go-ralph run <project>
     ├── load .ralph/<project>.json
     ├── reset stale running → pending  (crash recovery)
     │
-    └── for each issue (status=pending, filename order):
+    ├── pipeline.Load(".ralph/pipeline.yaml")
+    │       ├── not found + max_parallel=1  → runSequential()   (original for-loop)
+    │       ├── found     + max_parallel=1  → runPipelineSequential()
+    │       └── found     + max_parallel>1  → runPipelineParallel()
+    │
+    └── per issue (all modes), up to max_retries:
             │
             ├── assemble .ralph/prompts/<slug>.md  (fresh each attempt)
             │
-            ├── for attempt 1..max_retries:
-            │       ├── herdr.AgentCloseByName(ralph-<id>)  (stale pane cleanup)
-            │       ├── herdr agent start ralph-<id>
-            │       │       --cwd <dir> --workspace <id> --split down --no-focus
-            │       │       -- bash -c "pi --mode json ... "$(cat prompt)" | tee log.jsonl
-            │       │                   | python3 renderer
-            │       │                   ; echo RALPH_DONE:$?; read -r"
-            │       ├── mark issue → running, write state
-            │       ├── herdr wait output <pane> --match "RALPH_DONE:" --timeout <ms>
-            │       ├── read session ID sidecar → issue.PiSessionID
-            │       ├── RALPH_DONE:0  → succeeded = true, break
-            │       └── RALPH_DONE:≠0 / timeout → retry
+            ├── herdr.AgentCloseByName(ralph-<project>-<id>)  (stale pane cleanup)
+            ├── herdr agent start ralph-<project>-<id>
+            │       --cwd <dir> --workspace <id> --split down --no-focus
+            │       -- bash -c "pi --mode json [--model <model>] ... "$(cat prompt)" | tee log.jsonl
+            │                   | python3 renderer
+            │                   ; echo RALPH_DONE:$?; read -r"
+            ├── mark issue → running, write state
+            ├── herdr wait output <pane> --match "RALPH_DONE:" --timeout <ms>
+            ├── read session ID sidecar → issue.PiSessionID
+            ├── RALPH_DONE:0  → succeeded = true, break
+            └── RALPH_DONE:≠0 / timeout → retry
             │
             ├── herdr pane close <pane>  (if --close-panes or on failure)
             ├── succeeded → mark done,   write state
             └── failed    → mark failed, write state
-                    ├── stop_on_failure=true (default) → exit unless --continue
+                    ├── stop_on_failure=true → exit (sequential) or drain + exit (parallel)
                     └── stop_on_failure=false or --continue → next issue
 
 go-ralph status <project>
@@ -66,48 +72,68 @@ go-ralph logs <project> <id>
 
 ### Self-launch into herdr
 
-When `HERDR_ENV` is not set, `run` creates a workspace, renames the root pane, and re-runs itself inside that pane with `--workspace <id>`. This means the user only needs to run `go-ralph run` once — the herdr workspace appears automatically.
+When `HERDR_ENV` is not set, `run` creates a workspace, renames the root pane, and re-runs itself inside that pane with `--workspace <id>`. The user only needs to run `go-ralph run` once — the herdr workspace appears automatically.
+
+### Three execution modes
+
+`run` inspects `pipeline.yaml` and `max_parallel` to choose:
+1. **No pipeline, max_parallel=1** — simple sequential for-loop (original behaviour).
+2. **Pipeline, max_parallel=1** — sequential in pipeline path order, respecting `depends_on`.
+3. **Pipeline, max_parallel>1** — goroutines bounded by a semaphore channel of size `max_parallel`. `pipeline.ReadyIssues` is called each iteration to find issues whose path prerequisites are met and that are not already in-flight.
+
+### Pipeline file
+
+`.ralph/pipeline.yaml` has two keys: `paths` (map of name → ordered issue IDs) and `depends_on` (map of path name → list of prerequisite path names). Generated by `init`, editable by hand. Required when `max_parallel > 1`.
+
+### Per-issue model override
+
+Each `IssueState` carries a `model` field seeded from `config.default_model` at `init` time. When non-empty, `pi.PaneArgv` adds `--model <value>` to the pi invocation. Overridable per-issue by editing the state file.
 
 ### Skills embedded inline (not `--skill` flags)
 
-Skill files are read at prompt-assembly time and embedded as `<skill>` sections in the prompt file. pi receives the full knowledge without needing skill files installed on the agent machine, and without `--skill` flags polluting the CLI invocation.
+Skill files are read at prompt-assembly time and embedded as `<skill>` sections in the prompt file. pi receives the full knowledge without needing skill files installed, and without `--skill` flags polluting the CLI invocation.
 
 ### `pi --mode json "$(cat promptFile)"` (not `pi -p @file`)
 
-`--mode json` emits structured JSONL, enabling reliable session-ID extraction, tool-call rendering, and exit-code detection via the inline Python renderer. `$(cat ...)` avoids shell argument length limits. `@file` in `-p` mode requires project trust in `~/.pi/agent/trust.json` and is bypassed silently in non-interactive mode.
+`--mode json` emits structured JSONL, enabling reliable session-ID extraction, tool-call rendering, and exit-code detection via the inline Python renderer. `$(cat ...)` avoids shell argument length limits.
 
 ### `RALPH_DONE:$?` sentinel
 
-The pane command appends `echo RALPH_DONE:$((...))` after pi exits. Ralph reads this deterministic string via `herdr wait output --match "RALPH_DONE:" --source recent-unwrapped`. Exit code 0 = success; any non-zero = failure. This is independent of the herdr-pi integration.
+The pane command appends `echo RALPH_DONE:$((...))` after pi exits. Ralph reads this via `herdr wait output --match "RALPH_DONE:" --source recent-unwrapped`. Exit code 0 = success; any non-zero = failure.
 
 ### `read -r` keeps the pane alive
 
-`herdr agent start` closes the pane immediately when the process exits. `read -r` holds the shell open so Ralph can read the sentinel line. Ralph closes the pane explicitly with `herdr pane close` after processing.
+`herdr agent start` closes the pane immediately when the process exits. `read -r` holds the shell open so Ralph can read the sentinel line.
 
 ### Session ID sidecar
 
-The inline Python renderer writes the `{"type":"session","id":"..."}` event's `id` field to `<logFile>.session-id`. Ralph reads this after each attempt and stores it in `IssueState.PiSessionID`. `go-ralph logs` falls back to the sidecar on disk if the state field is empty.
+The inline Python renderer writes the `{"type":"session","id":"..."}` event's `id` field to `<logFile>.session-id`. Ralph reads this after each attempt and stores it in `IssueState.PiSessionID`.
 
 ### Retry with re-assembled prompt
 
 On retry, the prompt is re-assembled from the current issue file. Since pi marks completed checkboxes (`- [ ]` → `- [x]`) as it works, re-assembly lets pi see its prior progress and continue from where it left off.
 
-### Stop on failure by default
+### Stop on failure — parallel drain
 
-Issues typically have sequential dependencies (001 must compile before 002 can import it). `--continue` overrides when failures are known to be acceptable.
+In parallel mode, when `stop_on_failure=true`, ralph sets a `stopping` flag and waits for all in-flight goroutines to finish (draining the results channel) before returning the error. It does not cancel running panes mid-flight.
+
+### Atomic state writes
+
+State is written to `.json.tmp` then renamed. In parallel mode, a mutex guards concurrent writes from multiple goroutines.
 
 ## Package Responsibilities
 
 ```
 internal/issues    scan + parse issues/*.md
-internal/config    load/write .ralph/config.yaml with defaults
-internal/state     load/write .ralph/<project>.json (atomic tmp→rename)
+internal/config    load/write .ralph/config.yaml with defaults (max_parallel, default_model)
+internal/state     load/write .ralph/<project>.json (atomic tmp→rename); IssueState.Model field
 internal/prompt    assemble .ralph/prompts/<slug>.md
                    (context + skills inline + issue + instruction)
 internal/herdr     shell-out: WorkspaceCreate, AgentCloseByName, AgentStart,
                    WaitOutput, PaneClose, PaneRename, PaneRun
-internal/pi        PaneArgv, LogFile, SessionIDPath
-internal/cmd       cobra commands: init, run, status, reset, logs
+internal/pi        PaneArgv (incl. optional --model), LogFile, SessionIDPath
+internal/pipeline  Pipeline struct; Load/Write .ralph/pipeline.yaml; ReadyIssues dep resolver
+internal/cmd       cobra commands: init (--parallel flag), run (3 modes), status, reset, logs
 ```
 
 ## State Machine (per issue)

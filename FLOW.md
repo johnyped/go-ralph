@@ -12,16 +12,16 @@ go-ralph run <project>
 ├─ Reset stale running → pending
 ├─ herdr workspace create  → workspaceID
 │
-└─ for each pending issue:
-     ├─ for attempt 1..max_retries:
-     │    ├─ prompt.Assemble()       → .ralph/prompts/<slug>.md  (reads updated issue file)
-     │    ├─ herdr AgentCloseByName  → close stale pane if exists
-     │    ├─ herdr agent start       → paneID
-     │    ├─ state: running
-     │    ├─ herdr wait output       → RALPH_DONE:0 or RALPH_DONE:N or timeout
-     │    ├─ read session-id sidecar → IssueState.PiSessionID
-     │    └─ success → break; failure → retry
-     └─ state: done | failed
+├─ Try load .ralph/pipeline.yaml
+│
+├─ [No pipeline.yaml, max_parallel=1] sequential for-loop:
+│    └─ for each pending issue (filename order): run + retry
+│
+├─ [pipeline.yaml, max_parallel=1] sequential pipeline:
+│    └─ loop ReadyIssues → run one at a time in path order
+│
+└─ [pipeline.yaml, max_parallel>1] parallel dispatch:
+     └─ loop ReadyIssues → goroutine per issue, semaphore-bounded
 ```
 
 ---
@@ -48,11 +48,20 @@ herdr workspace create --cwd <dir> --label <project> --no-focus
 
 A fresh herdr workspace is created per run. All issue panes live inside it.
 
-### 3. Per-Issue Loop (with retries)
+### 3. Execution Mode Selection
 
-For each `pending` issue (in NNN order), up to `max_retries` attempts:
+```
+pipeline.Load(".ralph/pipeline.yaml")
+  → not found + max_parallel=1 → runSequential()
+  → found     + max_parallel=1 → runPipelineSequential()
+  → found     + max_parallel>1 → runPipelineParallel()
+```
 
-#### 3a. Prompt Assembly
+### 4. Per-Issue Loop (with retries)
+
+For each dispatched issue, up to `max_retries` attempts:
+
+#### 4a. Prompt Assembly
 
 Re-assembled fresh each attempt — reads the current issue file, picking up any `[x]` checkboxes from prior partial work:
 
@@ -82,17 +91,17 @@ Skills are resolved at assembly time:
 - `directory/` → reads `directory/SKILL.md`
 - missing file → hard error, run stops
 
-#### 3b. Stale Pane Cleanup
+#### 4b. Stale Pane Cleanup
 
 ```
 herdr agent list
-  → find any agent with name == "ralph-<id>"
+  → find any agent with name == "ralph-<project>-<id>"
   → herdr pane close <pane_id>
 ```
 
 Prevents `agent_name_taken` errors when re-running after a forceful kill.
 
-#### 3c. Pane Spawn
+#### 4c. Pane Spawn
 
 ```
 herdr agent start <name> \
@@ -105,38 +114,15 @@ herdr agent start <name> \
 The pane command (built by `pi.PaneArgv`):
 
 ```bash
-pi --mode json --name "ralph: <slug>" "$(cat .ralph/prompts/<slug>.md)" \
+pi --mode json [--model <model>] --name "ralph: <slug>" "$(cat .ralph/prompts/<slug>.md)" \
   | tee .ralph/logs/<slug>.jsonl \
-  | python3 -u -c "
-import sys, json
-had_error = False
-for line in sys.stdin:
-    e = json.loads(line)
-    t = e.get('type', '')
-    if t == 'session':
-        open('.ralph/logs/<slug>.jsonl.session-id', 'w').write(e.get('id', ''))
-    elif t == 'tool_execution_start':
-        print('  ⚙', e.get('toolName', ''), flush=True)
-        args = e.get('args', {})
-        if args: print('    └─', json.dumps(args)[:200], flush=True)  # tool args (truncated)
-    elif t == 'tool_execution_end':
-        if e.get('isError'): had_error = True
-        text = ''.join(p.get('text','') for p in e.get('result',{}).get('content',[]) if p.get('type')=='text').strip()
-        if text: print('    →', text[:200], flush=True)  # tool result (truncated)
-    elif t == 'agent_end':
-        print('  ✓ done', flush=True)
-    elif t == 'message_update':
-        ae = e.get('assistantMessageEvent', {})
-        atype = ae.get('type', '')
-        if atype == 'thinking_start': print('💭 ', end='', flush=True)  # one emoji per thinking block
-        elif atype in ('text_delta', 'thinking_delta'): print(ae.get('delta',''), end='', flush=True)
-        elif atype in ('text_end', 'thinking_end'): print(flush=True)
-sys.exit(1 if had_error else 0)
-"
+  | python3 -u -c "..."
 _pi_rc=${PIPESTATUS[0]} _py_rc=${PIPESTATUS[2]}
 echo RALPH_DONE:$((_pi_rc > 0 ? _pi_rc : _py_rc))
 read -r
 ```
+
+`--model <model>` is included only when `IssueState.Model` is non-empty.
 
 Key points:
 - `$(cat promptFile)` — shell expands file at run time, avoids arg length limits
@@ -146,7 +132,7 @@ Key points:
 - **`RALPH_DONE:$?`** — uses `PIPESTATUS` to correctly capture pi's exit code through the pipe
 - **`read -r`** — keeps pane alive for inspection after completion
 
-#### 3d. State → Running
+#### 4d. State → Running
 
 ```
 issue.Status      = "running"
@@ -155,7 +141,7 @@ issue.HerdrPaneID = paneID
 state.Write()  ← atomic
 ```
 
-#### 3e. Wait for Completion
+#### 4e. Wait for Completion
 
 ```
 herdr wait output <paneID> \
@@ -168,14 +154,14 @@ herdr wait output <paneID> \
 - `RALPH_DONE:N` → failure, retry if attempts remain
 - timeout → failure, retry if attempts remain
 
-#### 3f. Read Session ID
+#### 4f. Read Session ID
 
 ```
 os.ReadFile(.ralph/logs/<slug>.jsonl.session-id)
   → issue.PiSessionID = "<uuid>"
 ```
 
-#### 3g. State → Done | Failed
+#### 4g. State → Done | Failed
 
 After retry loop:
 ```
@@ -184,7 +170,31 @@ exhausted  → issue.Status = "failed"
 state.Write()  ← atomic
 ```
 
-If `stop_on_failure: true` and not `--continue`, run exits after first failed issue.
+If `stop_on_failure: true` and not `--continue`:
+- Sequential: run exits immediately after the failed issue.
+- Parallel: stops dispatching new issues; already-running goroutines are drained before exit.
+
+---
+
+## Parallel Dispatch Detail
+
+```
+sem := make(chan struct{}, max_parallel)   // concurrency limiter
+
+loop:
+  ready = pipeline.ReadyIssues(p, done, inFlight)
+  if ready is empty and inFlight is empty → done
+  if ready is empty → wait for a result, update done/inFlight, loop
+
+  for each id in ready:
+    acquire sem slot (or wait for a result first if full)
+    inFlight[id] = true
+    go runIssueRetry(id)   // releases sem slot on return
+
+  drain non-blocking results
+```
+
+`pipeline.ReadyIssues` returns issue IDs whose path's `depends_on` prerequisites are all in `done` and which are not yet `done` or `inFlight`.
 
 ---
 
@@ -193,14 +203,15 @@ If `stop_on_failure: true` and not `--continue`, run exits after first failed is
 ```
 .ralph/
   config.yaml
-  <project>.json                   ← issue state (id, slug, status, pi_session_id, timestamps)
+  pipeline.yaml                        ← path definitions and depends_on
+  <project>.json                       ← issue state (id, slug, status, model, pi_session_id, timestamps)
   prompts/
-    <slug>.md                      ← assembled prompt per issue (re-written each attempt)
+    <slug>.md                          ← assembled prompt per issue (re-written each attempt)
   logs/
-    <slug>.jsonl                   ← attempt 1 raw pi --mode json event stream
-    <slug>.jsonl.session-id        ← attempt 1 pi session UUID
-    <slug>.jsonl.attempt-2         ← attempt 2 (if retried)
-    <slug>.jsonl.attempt-2.session-id
+    <slug>.jsonl                       ← attempt 1 raw pi --mode json event stream
+    <slug>.jsonl.session-id            ← attempt 1 pi session UUID
+    <slug>-attempt-2.jsonl             ← attempt 2 (if retried)
+    <slug>-attempt-2.jsonl.session-id
 ```
 
 ---

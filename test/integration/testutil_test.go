@@ -202,4 +202,5 @@ type stateIssue struct {
 	StartedAt   *string `json:"started_at"`
 	FinishedAt  *string `json:"finished_at"`
 	PiSessionID string  `json:"pi_session_id,omitempty"`
+	Model       string  `json:"model,omitempty"`
 }

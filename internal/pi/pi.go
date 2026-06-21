@@ -60,8 +60,8 @@ sys.exit(1 if had_error else 0)
 // Tees raw JSONL to logFile, renders live tool activity in the pane.
 // Writes session ID to <logFile>.session-id sidecar.
 // read -r keeps the pane alive until ralph reads the RALPH_DONE: sentinel.
-func PaneArgv(dir string, cfg *config.Config, slug, promptFile, logFile string) []string {
-	jsonArgs := append([]string{cfg.PiPath}, buildArgs(dir, cfg, slug)...)
+func PaneArgv(dir string, cfg *config.Config, slug, promptFile, logFile, model string) []string {
+	jsonArgs := append([]string{cfg.PiPath}, buildArgs(dir, cfg, slug, model)...)
 	sidecarFile := logFile + ".session-id"
 	script := fmt.Sprintf(rendererScript, shellQuote(sidecarFile))
 	cmd := fmt.Sprintf(
@@ -89,8 +89,13 @@ func LogFile(dir, slug string, attempt int) string {
 	return filepath.Join(dir, ".ralph", "logs", name)
 }
 
-func buildArgs(dir string, cfg *config.Config, slug string) []string {
-	return []string{"--mode", "json", "--name", fmt.Sprintf("%s: %s", cfg.PiSessionPrefix, slug)}
+func buildArgs(dir string, cfg *config.Config, slug, model string) []string {
+	args := []string{"--mode", "json"}
+	if model != "" {
+		args = append(args, "--model", model)
+	}
+	args = append(args, "--name", fmt.Sprintf("%s: %s", cfg.PiSessionPrefix, slug))
+	return args
 }
 
 func shellJoin(args []string) string {

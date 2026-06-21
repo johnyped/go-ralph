@@ -1,19 +1,23 @@
 package cmd
 
 import (
+	"bufio"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/johnyped/go-ralph/internal/config"
 	"github.com/johnyped/go-ralph/internal/issues"
+	"github.com/johnyped/go-ralph/internal/pipeline"
 	"github.com/johnyped/go-ralph/internal/state"
 	"github.com/spf13/cobra"
 )
 
 var initDir string
+var initParallel int
 
 var initCmd = &cobra.Command{
 	Use:   "init <project_name>",
@@ -83,15 +87,62 @@ var initCmd = &cobra.Command{
 			return fmt.Errorf("pre-flight checks failed — fix the issues above and re-run")
 		}
 
-		// --- Write config if not exists ---
-		cfgPath := config.ConfigPath(dir)
-		if _, err := os.Stat(cfgPath); os.IsNotExist(err) {
-			if err := config.Write(dir, cfg); err != nil {
-				return fmt.Errorf("write config: %w", err)
+		// --- Determine concurrency N ---
+		n := initParallel
+		if n < 1 {
+			reader := bufio.NewReader(os.Stdin)
+			fmt.Print("Run sequentially or in parallel? [sequential/parallel]: ")
+			mode, _ := reader.ReadString('\n')
+			mode = strings.TrimSpace(mode)
+			if mode == "parallel" {
+				fmt.Print("Max concurrency (≥2): ")
+				line, _ := reader.ReadString('\n')
+				line = strings.TrimSpace(line)
+				n, err = strconv.Atoi(line)
+				if err != nil || n < 2 {
+					return fmt.Errorf("concurrency must be ≥2, got %q", line)
+				}
+			} else {
+				n = 1
 			}
-			fmt.Printf("Created %s\n", cfgPath)
+		}
+
+		// --- Write config (always overwrite) ---
+		cfg.MaxParallel = n
+		if err := config.Write(dir, cfg); err != nil {
+			return fmt.Errorf("write config: %w", err)
+		}
+		cfgPath := config.ConfigPath(dir)
+		fmt.Printf("Config exists: %s\n", cfgPath)
+
+		// --- Generate pipeline ---
+		p := &pipeline.Pipeline{
+			Paths:     map[string][]string{},
+			DependsOn: map[string][]string{},
+		}
+		if n == 1 {
+			ids := make([]string, 0, len(issueList))
+			for _, iss := range issueList {
+				ids = append(ids, iss.ID)
+			}
+			p.Paths["main"] = ids
 		} else {
-			fmt.Printf("Config exists: %s\n", cfgPath)
+			// Round-robin across up to n paths A, B, C, ...
+			numPaths := n
+			if numPaths > len(issueList) {
+				numPaths = len(issueList)
+			}
+			for i := 0; i < numPaths; i++ {
+				key := string(rune('A' + i))
+				p.Paths[key] = []string{}
+			}
+			for i, iss := range issueList {
+				key := string(rune('A' + (i % numPaths)))
+				p.Paths[key] = append(p.Paths[key], iss.ID)
+			}
+		}
+		if err := pipeline.Write(dir, p); err != nil {
+			return fmt.Errorf("write pipeline: %w", err)
 		}
 
 		// --- Write state ---
@@ -102,6 +153,7 @@ var initCmd = &cobra.Command{
 				Slug:   issue.Slug,
 				File:   issue.File,
 				Status: state.StatusPending,
+				Model:  cfg.DefaultModel,
 			})
 		}
 		if err := state.Write(dir, project, s); err != nil {
@@ -121,6 +173,7 @@ var initCmd = &cobra.Command{
 
 func init() {
 	initCmd.Flags().StringVar(&initDir, "dir", mustCwd(), "project directory")
+	initCmd.Flags().IntVar(&initParallel, "parallel", -1, "concurrency (1=sequential, ≥2=parallel, -1=ask)")
 }
 
 func herdrPiExtensionPath() string {

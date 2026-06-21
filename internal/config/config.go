@@ -16,6 +16,8 @@ type Config struct {
 	MaxRetries      int      `yaml:"max_retries"`
 	TimeoutMinutes  int      `yaml:"timeout_minutes"`
 	Instruction     string   `yaml:"instruction"`
+	MaxParallel     int      `yaml:"max_parallel"`
+	DefaultModel    string   `yaml:"default_model"`
 }
 
 var defaults = Config{
@@ -28,6 +30,8 @@ var defaults = Config{
 	StopOnFailure:  true,
 	MaxRetries:     3,
 	TimeoutMinutes: 30,
+	MaxParallel:    1,
+	DefaultModel:   "",
 	Instruction: `You are implementing a software issue.
 Complete all acceptance criteria using TDD (red-green-refactor).
 

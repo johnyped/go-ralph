@@ -26,6 +26,7 @@ type IssueState struct {
 	FinishedAt  *time.Time `json:"finished_at"`
 	HerdrPaneID string     `json:"herdr_pane_id,omitempty"`
 	PiSessionID string     `json:"pi_session_id,omitempty"`
+	Model       string     `json:"model,omitempty"`
 }
 
 type State struct {

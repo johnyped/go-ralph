@@ -1,8 +1,8 @@
 # go-ralph
 
-Autonomous development workflow orchestrator — runs `pi` coding sessions sequentially via `herdr`.
+Autonomous development workflow orchestrator — runs `pi` coding sessions via `herdr`, sequentially or in parallel.
 
-Ralph automates the final stage of autonomous software delivery: it reads issues from `issues/*.md`, assembles a prompt per issue (context files + skills + issue content + instruction), spawns a `pi --mode json` session in a dedicated `herdr` workspace pane, waits for it to finish, and records the result. By chaining sequential AI agents through design refinement, PRD generation, issue breakdown, and implementation, go-ralph enables a complete autonomous development workflow from concept to shipped code.
+Ralph automates the final stage of autonomous software delivery: it reads issues from `issues/*.md`, assembles a prompt per issue (context files + skills + issue content + instruction), spawns a `pi --mode json` session in a dedicated `herdr` workspace pane, waits for it to finish, and records the result. By chaining AI agents through design refinement, PRD generation, issue breakdown, and implementation, go-ralph enables a complete autonomous development workflow from concept to shipped code.
 
 ## Inspiration: The RALP Loop
 
@@ -11,7 +11,7 @@ go-ralph is inspired by the **RALP loop** technique from [Matt Pocock's skills](
 1. **`/grill-me`** — Stress-test a plan or design through relentless questioning until reaching shared understanding
 2. **`/to-prd`** — Convert the refined plan into a formal PRD (Product Requirements Document)
 3. **`/to-issue`** — Break the PRD into independently-grabbable implementation issues
-4. **`go-ralph run`** — Execute all issues sequentially, with each issue assigned to a dedicated `pi` coding session
+4. **`go-ralph run`** — Execute all issues sequentially or in parallel, with each issue assigned to a dedicated `pi` coding session
 
 This workflow bridges the gap between high-level design and hands-on implementation, ensuring clarity at each stage before handing off to the next. go-ralph automates the final orchestration step, running each issue through a full TDD (red-green-refactor) cycle with resumability and crash recovery.
 
@@ -47,9 +47,9 @@ go install github.com/johnyped/go-ralph/cmd/ralph@latest
 
 ```bash
 # Initialize ralph for a project (run once per project)
-go-ralph init <project_name> [--dir <path>]
+go-ralph init <project_name> [--dir <path>] [--parallel N]
 
-# Run all pending issues sequentially
+# Run all pending issues
 go-ralph run <project_name> [--dir <path>] [--from <N>] [--continue] [--dry-run] [--close-panes]
 
 # Show issue status
@@ -68,7 +68,8 @@ go-ralph logs <project_name> <issue-id> [--dir <path>]
 
 ```bash
 cd ~/projects/my-app
-go-ralph init my-app
+go-ralph init my-app                  # sequential (prompts if omitted)
+go-ralph init my-app --parallel 3    # parallel with 3 concurrent agents
 go-ralph run my-app
 go-ralph run my-app --from 004       # resume from issue 004
 go-ralph run my-app --continue       # keep going past failures
@@ -102,6 +103,7 @@ my-project/
   PRD.md
   .ralph/
     config.yaml         # ralph config (created by init)
+    pipeline.yaml       # path definitions and depends_on (created by init)
     my-project.json     # issue state
     prompts/            # assembled prompts (generated per run)
     logs/               # JSONL event logs + session-id sidecars
@@ -128,38 +130,60 @@ skills:
 
 # Retry policy
 max_retries: 3        # attempts per issue before marking failed
-timeout_minutes: 10   # per-attempt timeout
+timeout_minutes: 30   # per-attempt timeout
 
 # Stop at first failure (use --continue flag to override per run)
 stop_on_failure: true
 
+# Parallel execution (set by go-ralph init --parallel N)
+max_parallel: 1       # 1 = sequential; ≥2 = parallel goroutines (requires pipeline.yaml)
+
+# Default pi model for all issues (empty = pi default)
+default_model: ""
+
 instruction: |
   You are implementing a software issue.
   Complete all acceptance criteria using TDD (red-green-refactor).
-
-  IMPORTANT — checkpoint after each acceptance criterion:
-  - When you complete a checkbox item, immediately update the issue file
-    to mark it done: change - [ ] to - [x]
-  - This lets ralph resume from where you left off if the session is interrupted
-
-  When done, verify EVERY acceptance criteria checkbox in the issue is satisfied.
-  Do not ask clarifying questions — make reasonable decisions and proceed.
+  ...
 ```
 
 ## How It Works
 
-1. `go-ralph init` scans `issues/*.md`, checks dependencies, writes `.ralph/<project>.json` with all issues as `pending`.
-2. `go-ralph run` processes each pending issue sequentially:
-   - Resets any stale `running` issues to `pending` (crash recovery)
-   - Creates a dedicated herdr workspace for the run
-   - For each issue, retries up to `max_retries` times:
-     - Assembles prompt fresh (reads updated issue file — picks up any `[x]` checkboxes from prior partial run)
-     - Closes any stale pane with the same agent name
-     - Spawns `pi --mode json` in a herdr pane
-     - Waits up to `timeout_minutes` for `RALPH_DONE:` sentinel
-     - On success: marks `done`; on timeout/failure: retries
-   - After all retries exhausted: marks `failed`, stops if `stop_on_failure: true`
-3. All output is visible in the herdr workspace panes.
+1. `go-ralph init` scans `issues/*.md`, checks dependencies, prompts for sequential or parallel mode (or uses `--parallel N`), writes `pipeline.yaml` and `.ralph/<project>.json` with all issues as `pending`. Config is always overwritten.
+2. `go-ralph run` selects one of three execution modes:
+   - **No `pipeline.yaml` + `max_parallel=1`** — original sequential for-loop over pending issues.
+   - **`pipeline.yaml` + `max_parallel=1`** — sequential, but in pipeline path order respecting `depends_on`.
+   - **`pipeline.yaml` + `max_parallel>1`** — parallel goroutine dispatch, semaphore-bounded to `max_parallel`. Issues within a path run in order; paths run concurrently if their `depends_on` prerequisites are met.
+3. For each issue, ralph retries up to `max_retries` times:
+   - Assembles prompt fresh (reads updated issue file — picks up any `[x]` checkboxes from prior partial run)
+   - Closes any stale pane with the same agent name (`ralph-<project>-<id>`)
+   - Spawns `pi --mode json [--model <model>]` in a herdr pane
+   - Waits up to `timeout_minutes` for `RALPH_DONE:` sentinel
+   - On success: marks `done`; on timeout/failure: retries
+4. When `stop_on_failure=true` in parallel mode, ralph stops dispatching new issues and drains already-running goroutines before exiting.
+
+## Parallel Execution
+
+`go-ralph init --parallel N` (or the interactive prompt) sets `max_parallel: N` and generates `pipeline.yaml` with round-robin path assignment:
+
+```yaml
+paths:
+  A:
+    - "001"
+    - "003"
+  B:
+    - "002"
+    - "004"
+depends_on: {}
+```
+
+Each named path is a sequential lane. Issues in the same path run one after another; different paths run concurrently. Use `depends_on` to require a path to finish before another starts:
+
+```yaml
+depends_on:
+  B:
+    - A   # path B won't start until all issues in path A are done
+```
 
 ## Prompt Structure
 
@@ -208,4 +232,3 @@ Raw `pi --mode json` output is tee'd to `.ralph/logs/<slug>.jsonl`. On retries, 
 The pi session ID sidecar follows the same naming: `<slug>.jsonl.session-id`, `<slug>-attempt-2.jsonl.session-id`, etc.
 
 Use `go-ralph logs <project> <issue-id>` to get the session ID and `pi --session <id>` resume command.
-
