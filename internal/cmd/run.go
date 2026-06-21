@@ -27,7 +27,7 @@ var (
 
 var runCmd = &cobra.Command{
 	Use:   "run <project_name>",
-	Short: "Run pending issues sequentially via pi in herdr panes",
+	Short: "Run pending issues via pi in herdr panes (sequential or parallel)",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		project := args[0]

@@ -173,7 +173,7 @@ var initCmd = &cobra.Command{
 
 func init() {
 	initCmd.Flags().StringVar(&initDir, "dir", mustCwd(), "project directory")
-	initCmd.Flags().IntVar(&initParallel, "parallel", -1, "concurrency (1=sequential, ≥2=parallel, -1=ask)")
+	initCmd.Flags().IntVar(&initParallel, "parallel", -1, "max concurrent sessions (1=sequential, ≥2=parallel; omit to be prompted)")
 }
 
 func herdrPiExtensionPath() string {

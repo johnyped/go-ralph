@@ -9,7 +9,7 @@ import (
 
 var rootCmd = &cobra.Command{
 	Use:   "go-ralph",
-	Short: "Loop agent orchestrator — runs pi sessions via herdr",
+	Short: "Autonomous issue orchestrator — runs pi sessions via herdr (sequential or parallel)",
 }
 
 func Execute() {
