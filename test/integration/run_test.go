@@ -334,6 +334,43 @@ func TestRunParallel_StopOnFailure_Drains(t *testing.T) {
 }
 
 
+func TestRunParallel_PathBFinishesFirst_PathACompletes(t *testing.T) {
+	bin := buildBinary(t)
+	logDir := t.TempDir()
+	binDir := makeBinDir(t, map[string]string{
+		"herdr": buildFakeHerdr(t),
+		"pi":    buildFakePi(t),
+	})
+	prependPath(t, binDir)
+
+	// Path A has 2 issues, Path B has 1 issue (B will finish first)
+	fix := makeFixtureN(t, 3)
+	initProject(t, bin, fix)
+
+	writePipelineYAML(t, fix, "paths:\n  A:\n    - \"001\"\n    - \"002\"\n  B:\n    - \"003\"\ndepends_on: {}\n")
+	writeConfigYAML(t, fix, "skills: []\ncontext_files:\n  - PRD.md\nmax_parallel: 2\n")
+
+	stdout, stderr, code := runCmd(t, bin,
+		[]string{"HERDR_ENV=1", "FAKE_HERDR_LOG_DIR=" + logDir},
+		"run", "test-project", "--dir", fix, "--workspace", "t1")
+	if code != 0 {
+		t.Fatalf("exit %d\nstdout: %s\nstderr: %s", code, stdout, stderr)
+	}
+
+	// All 3 issues must be done
+	data, _ := os.ReadFile(filepath.Join(fix, ".ralph", "test-project.json"))
+	doneCount := strings.Count(string(data), `"status": "done"`)
+	if doneCount != 3 {
+		t.Errorf("want 3 done, got %d\nstate: %s\nstdout: %s\nstderr: %s", doneCount, string(data), stdout, stderr)
+	}
+
+	// 002 must have started (agent name logged)
+	agentsData, _ := os.ReadFile(filepath.Join(logDir, "agents.txt"))
+	if !strings.Contains(string(agentsData), "002") {
+		t.Errorf("002 never dispatched\nagents: %s\nstdout: %s", agentsData, stdout)
+	}
+}
+
 func TestRun_TwoProjectsSimultaneously(t *testing.T) {
 	bin := buildBinary(t)
 	logDir := t.TempDir()
