@@ -332,3 +332,93 @@ func TestRunParallel_StopOnFailure_Drains(t *testing.T) {
 		t.Errorf("want both issues failed (drain proof); got: %s", data)
 	}
 }
+
+
+func TestRun_TwoProjectsSimultaneously(t *testing.T) {
+	bin := buildBinary(t)
+	logDir := t.TempDir()
+	binDir := makeBinDir(t, map[string]string{
+		"herdr": buildFakeHerdr(t),
+		"pi":    buildFakePi(t),
+	})
+	prependPath(t, binDir)
+
+	// Two separate project fixtures, each with 2 issues
+	fixA := makeFixtureN(t, 2)
+	fixB := makeFixtureN(t, 2)
+
+	// Init both projects sequentially (--parallel 1)
+	stdout, stderr, code := runCmd(t, bin, nil, "init", "project-a", "--dir", fixA, "--parallel", "1")
+	if code != 0 {
+		t.Fatalf("init project-a failed (exit %d): stdout=%s stderr=%s", code, stdout, stderr)
+	}
+	stdout, stderr, code = runCmd(t, bin, nil, "init", "project-b", "--dir", fixB, "--parallel", "1")
+	if code != 0 {
+		t.Fatalf("init project-b failed (exit %d): stdout=%s stderr=%s", code, stdout, stderr)
+	}
+
+	// Run both projects simultaneously in goroutines
+	type result struct {
+		stdout, stderr string
+		code           int
+	}
+	chA := make(chan result, 1)
+	chB := make(chan result, 1)
+
+	env := []string{
+		"HERDR_ENV=1",
+		"FAKE_HERDR_LOG_DIR=" + logDir,
+	}
+
+	go func() {
+		so, se, c := runCmd(t, bin, env, "run", "project-a", "--dir", fixA, "--workspace", "ws-a")
+		chA <- result{so, se, c}
+	}()
+	go func() {
+		so, se, c := runCmd(t, bin, env, "run", "project-b", "--dir", fixB, "--workspace", "ws-b")
+		chB <- result{so, se, c}
+	}()
+
+	rA := <-chA
+	rB := <-chB
+
+	if rA.code != 0 {
+		t.Errorf("project-a failed (exit %d)\nstdout: %s\nstderr: %s", rA.code, rA.stdout, rA.stderr)
+	}
+	if rB.code != 0 {
+		t.Errorf("project-b failed (exit %d)\nstdout: %s\nstderr: %s", rB.code, rB.stdout, rB.stderr)
+	}
+
+	// Read shared agents.txt — all agent names from both runs
+	agentsData, err := os.ReadFile(filepath.Join(logDir, "agents.txt"))
+	if err != nil {
+		t.Fatalf("agents.txt missing: %v", err)
+	}
+	agents := string(agentsData)
+	t.Logf("agents.txt:\n%s", agents)
+
+	// Project-A agents must be project-scoped
+	for _, id := range []string{"001", "002"} {
+		want := "ralph-project-a-" + id
+		if !strings.Contains(agents, want) {
+			t.Errorf("missing %q in agents.txt", want)
+		}
+	}
+	// Project-B agents must be project-scoped
+	for _, id := range []string{"001", "002"} {
+		want := "ralph-project-b-" + id
+		if !strings.Contains(agents, want) {
+			t.Errorf("missing %q in agents.txt", want)
+		}
+	}
+
+	// Both project states must show all issues done
+	dataA, _ := os.ReadFile(filepath.Join(fixA, ".ralph", "project-a.json"))
+	if strings.Count(string(dataA), `"status": "done"`) != 2 {
+		t.Errorf("project-a: want 2 done; got: %s", dataA)
+	}
+	dataB, _ := os.ReadFile(filepath.Join(fixB, ".ralph", "project-b.json"))
+	if strings.Count(string(dataB), `"status": "done"`) != 2 {
+		t.Errorf("project-b: want 2 done; got: %s", dataB)
+	}
+}
